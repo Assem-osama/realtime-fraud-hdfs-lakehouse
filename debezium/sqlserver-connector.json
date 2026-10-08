@@ -1,0 +1,20 @@
+{
+  "name": "fraud-sqlserver-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+    "database.hostname": "sqlserver",
+    "database.port": "1433",
+    "database.user": "${DB_USER}",
+    "database.password": "${DB_PASSWORD}",
+    "database.names": "FraudDB",
+    "topic.prefix": "sqlserver",
+    "table.include.list": "dbo.Transactions",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "schema.history.internal.kafka.topic": "schemahistory.fraud",
+    "schema.history.internal.kafka.replication.factor": "1",
+    "database.encrypt": "false",
+    "database.trustServerCertificate": "true",
+    "decimal.handling.mode": "string",
+    "snapshot.mode": "initial"
+  }
+}
