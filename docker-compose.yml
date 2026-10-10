@@ -1,142 +1,383 @@
+
 services:
+
+  # PROFILE: ingest
+
   # 1. SQL Server Database
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: sqlserver
     mem_limit: 2g
+
     ports:
       - "1433:1433"
+
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: ${DB_PASSWORD:?}
       MSSQL_AGENT_ENABLED: "true"
       MSSQL_MEMORY_LIMIT_MB: "1536"
+
     volumes:
       - mssql_data:/var/opt/mssql
+
     healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" -b >/dev/null 2>&1 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" -b >/dev/null 2>&1 || exit 1"
+        ]
       interval: 10s
       timeout: 5s
       retries: 30
       start_period: 30s
-    profiles: ["ingest"]
+
+    profiles:
+      - ingest
+
     networks:
       - lakehouse-net
 
-  # 1.1 SQL Server Initialization Service
+
+  # 1.1 SQL Server Initialization
   sql-init:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sql-init
     mem_limit: 256m
+
     depends_on:
       sqlserver:
         condition: service_healthy
-    entrypoint: ["/bin/bash", "-c"]
+
+    entrypoint:
+      - /bin/bash
+      - -c
+
     command:
       - |-
         for attempt in {1..60}; do
-          if /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" -C -l 5 -b -Q "SELECT 1" >/dev/null 2>&1; then
+          if /opt/mssql-tools18/bin/sqlcmd \
+            -S sqlserver \
+            -U sa \
+            -P "$$MSSQL_SA_PASSWORD" \
+            -C \
+            -l 5 \
+            -b \
+            -Q "SELECT 1" >/dev/null 2>&1; then
+
             echo "SQL Server accepts network connections."
             break
           fi
+
           if [ "$$attempt" -eq 60 ]; then
             echo "SQL Server did not accept connections." >&2
             exit 1
           fi
+
           echo "Waiting for SQL Server network listener ($$attempt/60)..."
           sleep 5
         done
-        exec /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" -C -b -i /init/init.sql
+
+        exec /opt/mssql-tools18/bin/sqlcmd \
+          -S sqlserver \
+          -U sa \
+          -P "$$MSSQL_SA_PASSWORD" \
+          -C \
+          -b \
+          -i /init/init.sql
+
     environment:
       MSSQL_SA_PASSWORD: ${DB_PASSWORD:?}
+
     volumes:
       - ./sql:/init:ro
+
     restart: "no"
-    profiles: ["ingest"]
+
+    profiles:
+      - ingest
+
     networks:
       - lakehouse-net
 
-  # 2. Apache Kafka (KRaft Mode)
+
+  # 2. Apache Kafka - KRaft
   kafka:
     image: apache/kafka:latest
     container_name: kafka
     mem_limit: 768m
+
     ports:
       - "9092:9092"
       - "29092:29092"
+
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
+
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_EXTERNAL://localhost:29092
+
+      KAFKA_LISTENERS: >-
+        PLAINTEXT://0.0.0.0:9092,
+        PLAINTEXT_EXTERNAL://0.0.0.0:29092,
+        CONTROLLER://0.0.0.0:9093
+
+      KAFKA_ADVERTISED_LISTENERS: >-
+        PLAINTEXT://kafka:9092,
+        PLAINTEXT_EXTERNAL://localhost:29092
+
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: >-
+        PLAINTEXT:PLAINTEXT,
+        PLAINTEXT_EXTERNAL:PLAINTEXT,
+        CONTROLLER:PLAINTEXT
+
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+
       KAFKA_CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
       KAFKA_HEAP_OPTS: "-Xms384m -Xmx512m"
+
     volumes:
       - kafka_data:/var/lib/kafka/data
+
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 >/dev/null 2>&1 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 >/dev/null 2>&1 || exit 1"
+        ]
       interval: 10s
       timeout: 10s
       retries: 30
       start_period: 20s
+
     networks:
       - lakehouse-net
+
 
   # 3. Debezium Kafka Connect
   debezium:
     image: quay.io/debezium/connect:2.4
     container_name: debezium
     mem_limit: 1g
+
     depends_on:
       kafka:
         condition: service_healthy
+
       sqlserver:
         condition: service_healthy
+
       sql-init:
         condition: service_completed_successfully
+
     ports:
       - "8083:8083"
+
     environment:
-      - BOOTSTRAP_SERVERS=kafka:9092
-      - GROUP_ID=2
-      - CONFIG_STORAGE_TOPIC=fraud_connect_configs
-      - OFFSET_STORAGE_TOPIC=fraud_connect_offset
-      - STATUS_STORAGE_TOPIC=fraud_connect_statuses
-      - CONFIG_STORAGE_REPLICATION_FACTOR=1
-      - OFFSET_STORAGE_REPLICATION_FACTOR=1
-      - STATUS_STORAGE_REPLICATION_FACTOR=1
-      - HEAP_OPTS=-Xms256m -Xmx640m
-    profiles: ["ingest"]
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 2
+
+      CONFIG_STORAGE_TOPIC: fraud_connect_configs
+      OFFSET_STORAGE_TOPIC: fraud_connect_offset
+      STATUS_STORAGE_TOPIC: fraud_connect_statuses
+
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+
+      HEAP_OPTS: "-Xms256m -Xmx640m"
+
+    profiles:
+      - ingest
+
     networks:
       - lakehouse-net
+
+
+  # PROFILE: ui
 
   # 4. Kafka UI
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     mem_limit: 512m
+
     depends_on:
       kafka:
         condition: service_healthy
+
     ports:
       - "8090:8080"
+
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-    profiles: ["ui"]
+
+    profiles:
+      - ui
+
+    networks:
+      - lakehouse-net
+
+
+  # PROFILE: process
+
+  # 5. HDFS NameNode
+  namenode:
+    image: apache/hadoop:3.3.6
+    container_name: namenode
+    hostname: namenode
+    user: root
+    mem_limit: 768m
+
+    command:
+      - hdfs
+      - namenode
+  
+    ports:
+      - "127.0.0.1:9870:9870"
+
+    environment:
+      HDFS_NAMENODE_USER: root
+      ENSURE_NAMENODE_DIR: /hadoop-data/name
+
+      HADOOP_HEAPSIZE_MAX: 512m
+
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+
+      HDFS-SITE.XML_dfs.namenode.name.dir: /hadoop-data/name
+
+      HDFS-SITE.XML_dfs.replication: "1"
+
+      HDFS-SITE.XML_dfs.permissions.enabled: "false"
+
+      HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check: "false"
+
+    volumes:
+      - namenode_data:/hadoop-data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'echo > /dev/tcp/localhost/9870' || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+    profiles:
+      - process
+
+    networks:
+      - lakehouse-net
+
+
+  # 6. HDFS DataNode
+  datanode:
+    image: apache/hadoop:3.3.6
+    container_name: datanode
+    hostname: datanode
+    user: root
+    mem_limit: 512m
+
+    command:
+      - hdfs
+      - datanode
+
+    depends_on:
+      namenode:
+        condition: service_healthy
+
+    environment:
+      HDFS_DATANODE_USER: root
+
+      HADOOP_HEAPSIZE_MAX: 384m
+
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+
+      HDFS-SITE.XML_dfs.datanode.data.dir: /hadoop-data/data
+
+      HDFS-SITE.XML_dfs.replication: "1"
+
+    volumes:
+      - datanode_data:/hadoop-data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'echo > /dev/tcp/namenode/8020' || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+    profiles:
+      - process
+
+    networks:
+      - lakehouse-net
+
+
+  # 7. Spark Processing Container
+  spark-silver:
+    image: apache/spark:3.5.6-python3
+    container_name: spark-silver
+    user: root
+    mem_limit: 1536m
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+      namenode:
+        condition: service_healthy
+
+      datanode:
+        condition: service_healthy
+
+    environment:
+      AVAILABLE_NOW: ${AVAILABLE_NOW:-false}
+
+    command: ["/opt/spark/bin/spark-submit", "/opt/jobs/silver_stream.py"]
+
+    ports:
+    - "127.0.0.1:4040:4040"
+
+    volumes:
+      - ./spark/jobs:/opt/jobs:ro
+      - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - spark_ivy:/ivy
+
+    restart: "no"
+
+    profiles:
+      - process
+
     networks:
       - lakehouse-net
 
 networks:
   lakehouse-net:
     driver: bridge
-    
+
 volumes:
   mssql_data:
   kafka_data:
+  namenode_data:
+  datanode_data:
+  spark_ivy:
