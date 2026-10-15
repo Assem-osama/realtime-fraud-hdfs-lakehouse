@@ -266,10 +266,7 @@ def write_silver_batch(batch_df, batch_id):
             .save(SILVER_PATH)
         )
 
-    print(
-        f"Silver batch {batch_id} processed. "
-        f"Input rows: {batch_df.count()}"
-    )
+    print(f"Silver batch {batch_id} processed.")
 
 # 10. Start the streaming query
 

@@ -1,4 +1,3 @@
--- Idempotent database bootstrap/migration. Run with sqlcmd (which honors GO).
 IF DB_ID(N'FraudDB') IS NULL
 BEGIN
     CREATE DATABASE FraudDB;
@@ -74,5 +73,19 @@ BEGIN
         @source_name = N'Transactions',
         @role_name = NULL,
         @supports_net_changes = 1;
+END;
+GO
+
+IF OBJECT_ID(N'dbo.SimulatorCheckpoint', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SimulatorCheckpoint
+    (
+        SourcePath NVARCHAR(850) NOT NULL
+            CONSTRAINT PK_SimulatorCheckpoint PRIMARY KEY,
+        SourceRowNumber BIGINT NOT NULL,
+        NextByteOffset BIGINT NOT NULL,
+        UpdatedAt DATETIME2(3) NOT NULL
+            CONSTRAINT DF_SimulatorCheckpoint_UpdatedAt DEFAULT SYSUTCDATETIME()
+    );
 END;
 GO
