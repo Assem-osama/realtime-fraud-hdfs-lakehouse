@@ -32,7 +32,7 @@ and prepares Gold data marts for downstream SQL analytics.
     and queryability must be verified in the running environment before
     downstream consumers connect.
 
-![Real-Time Fraud Data Flow Diagram](Data-Flow-Diagram.jpg)
+![Real-Time Fraud Data Flow Diagram](Data-Flow-Diagram.png)
 
 ## Technology stack
 
@@ -101,7 +101,7 @@ workflow are:
 ├── .env                 # local secrets; do not commit
 ├── .env.example
 ├── Architecture_Diagram.jpg
-├── Data-Flow-Diagram.jpg
+├── Data-Flow-Diagram.png
 └── architecture.png
 ```
 
